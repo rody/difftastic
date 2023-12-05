@@ -19,7 +19,7 @@ use crate::parse::syntax::{AtomKind, Syntax};
 /// languages we should parse them as.
 ///
 /// Note that we don't support sub-languages more than one layer deep.
-pub struct TreeSitterSubLanguage {
+pub(crate) struct TreeSitterSubLanguage {
     /// How to identify a node. The query must contain exactly one
     /// capture group (the name is arbitrary).
     query: ts::Query,
@@ -29,9 +29,9 @@ pub struct TreeSitterSubLanguage {
 }
 
 /// Configuration for a tree-sitter parser.
-pub struct TreeSitterConfig {
+pub(crate) struct TreeSitterConfig {
     /// The tree-sitter language parser.
-    pub language: ts::Language,
+    pub(crate) language: ts::Language,
 
     /// Tree-sitter nodes that we treat as indivisible atoms.
     ///
@@ -61,6 +61,7 @@ pub struct TreeSitterConfig {
 
 extern "C" {
     fn tree_sitter_ada() -> ts::Language;
+    fn tree_sitter_apex() -> ts::Language;
     fn tree_sitter_bash() -> ts::Language;
     fn tree_sitter_c() -> ts::Language;
     fn tree_sitter_c_sharp() -> ts::Language;
@@ -105,6 +106,7 @@ extern "C" {
     fn tree_sitter_ruby() -> ts::Language;
     fn tree_sitter_rust() -> ts::Language;
     fn tree_sitter_scala() -> ts::Language;
+    fn tree_sitter_scss() -> ts::Language;
     fn tree_sitter_solidity() -> ts::Language;
     fn tree_sitter_sql() -> ts::Language;
     fn tree_sitter_swift() -> ts::Language;
@@ -126,7 +128,7 @@ const OCAML_ATOM_NODES: [&str; 6] = [
     "attribute_id",
 ];
 
-pub fn from_language(language: guess::Language) -> TreeSitterConfig {
+pub(crate) fn from_language(language: guess::Language) -> TreeSitterConfig {
     use guess::Language::*;
     match language {
         Ada => {
@@ -140,6 +142,30 @@ pub fn from_language(language: guess::Language) -> TreeSitterConfig {
                 highlight_query: ts::Query::new(
                     language,
                     include_str!("../../vendored_parsers/highlights/ada.scm"),
+                )
+                .unwrap(),
+                sub_languages: vec![],
+            }
+        }
+        Apex => {
+            let language = unsafe { tree_sitter_apex() };
+            TreeSitterConfig {
+                language,
+                atom_nodes: vec![
+                    "string_literal",
+                    "null_literal",
+                    "boolean",
+                    "int",
+                    "decimal_floating_point_literal",
+                    "date_literal",
+                    "currency_literal",
+                ]
+                .into_iter()
+                .collect(),
+                delimiter_tokens: vec![("[", "]"), ("(", ")"), ("{", "}")],
+                highlight_query: ts::Query::new(
+                    language,
+                    include_str!("../../vendored_parsers/highlights/apex.scm"),
                 )
                 .unwrap(),
                 sub_languages: vec![],
@@ -614,7 +640,11 @@ pub fn from_language(language: guess::Language) -> TreeSitterConfig {
             let language = unsafe { tree_sitter_kotlin() };
             TreeSitterConfig {
                 language,
-                atom_nodes: vec!["line_string_literal", "character_literal"]
+                // Flattening nullable type means we can't diff the
+                // structure of complex types within, but it beats
+                // ignoring nullable changes.
+                // https://github.com/Wilfred/difftastic/issues/411
+                atom_nodes: vec!["line_string_literal", "character_literal", "nullable_type"]
                     .into_iter()
                     .collect(),
                 delimiter_tokens: vec![("(", ")"), ("{", "}"), ("[", "]"), ("<", ">")]
@@ -906,6 +936,22 @@ pub fn from_language(language: guess::Language) -> TreeSitterConfig {
                 sub_languages: vec![],
             }
         }
+        Scss => {
+            let language = unsafe { tree_sitter_scss() };
+            TreeSitterConfig {
+                language,
+                atom_nodes: vec!["integer_value", "float_value", "color_value"]
+                    .into_iter()
+                    .collect(),
+                delimiter_tokens: vec![("{", "}"), ("(", ")")],
+                highlight_query: ts::Query::new(
+                    language,
+                    include_str!("../../vendored_parsers/highlights/scss.scm"),
+                )
+                .unwrap(),
+                sub_languages: vec![],
+            }
+        }
         Solidity => {
             let language = unsafe { tree_sitter_solidity() };
             TreeSitterConfig {
@@ -1058,7 +1104,7 @@ pub fn from_language(language: guess::Language) -> TreeSitterConfig {
 }
 
 /// Parse `src` with tree-sitter.
-pub fn to_tree(src: &str, config: &TreeSitterConfig) -> tree_sitter::Tree {
+pub(crate) fn to_tree(src: &str, config: &TreeSitterConfig) -> tree_sitter::Tree {
     let mut parser = ts::Parser::new();
     parser
         .set_language(config.language)
@@ -1068,9 +1114,9 @@ pub fn to_tree(src: &str, config: &TreeSitterConfig) -> tree_sitter::Tree {
 }
 
 #[derive(Debug)]
-pub struct ExceededByteLimit(pub usize);
+pub(crate) struct ExceededByteLimit(pub(crate) usize);
 
-pub fn to_tree_with_limit(
+pub(crate) fn to_tree_with_limit(
     diff_options: &DiffOptions,
     config: &TreeSitterConfig,
     lhs_src: &str,
@@ -1087,7 +1133,7 @@ pub fn to_tree_with_limit(
 /// Find any nodes that can be parsed as other languages (e.g. JavaScript embedded in HTML),
 /// and return a map of their node IDs mapped to parsed trees. Every time we see such a node,
 /// we will ignore it and recurse into the root node of the given tree instead.
-pub fn parse_subtrees(
+pub(crate) fn parse_subtrees(
     src: &str,
     config: &TreeSitterConfig,
     tree: &tree_sitter::Tree,
@@ -1213,7 +1259,7 @@ fn tree_highlights(
     }
 }
 
-pub fn print_tree(src: &str, tree: &tree_sitter::Tree) {
+pub(crate) fn print_tree(src: &str, tree: &tree_sitter::Tree) {
     let mut cursor = tree.walk();
     print_cursor(src, &mut cursor, 0);
 }
@@ -1248,7 +1294,7 @@ fn print_cursor(src: &str, cursor: &mut ts::TreeCursor, depth: usize) {
     }
 }
 
-pub fn comment_positions(
+pub(crate) fn comment_positions(
     tree: &tree_sitter::Tree,
     src: &str,
     config: &TreeSitterConfig,
@@ -1271,9 +1317,9 @@ pub fn comment_positions(
 }
 
 #[derive(Debug)]
-pub struct ExceededParseErrorLimit(pub usize);
+pub(crate) struct ExceededParseErrorLimit(pub(crate) usize);
 
-pub fn to_syntax_with_limit<'a>(
+pub(crate) fn to_syntax_with_limit<'a>(
     lhs_src: &str,
     rhs_src: &str,
     lhs_tree: &tree_sitter::Tree,
@@ -1306,7 +1352,7 @@ pub fn to_syntax_with_limit<'a>(
     Ok((lhs_nodes, rhs_nodes))
 }
 
-pub fn to_syntax<'a>(
+pub(crate) fn to_syntax<'a>(
     tree: &tree_sitter::Tree,
     src: &str,
     arena: &'a Arena<Syntax<'a>>,
@@ -1353,7 +1399,7 @@ pub fn to_syntax<'a>(
 }
 
 /// Parse `src` with tree-sitter and convert to difftastic Syntax.
-pub fn parse<'a>(
+pub(crate) fn parse<'a>(
     arena: &'a Arena<Syntax<'a>>,
     src: &str,
     config: &TreeSitterConfig,
@@ -1412,7 +1458,7 @@ fn find_delim_positions(
     None
 }
 
-pub struct HighlightedNodeIds {
+pub(crate) struct HighlightedNodeIds {
     keyword_ids: HashSet<usize>,
     comment_ids: HashSet<usize>,
     string_ids: HashSet<usize>,
@@ -1434,10 +1480,10 @@ fn all_syntaxes_from_cursor<'a>(
     subtrees: &DftHashMap<usize, (tree_sitter::Tree, TreeSitterConfig, HighlightedNodeIds)>,
     ignore_comments: bool,
 ) -> Vec<&'a Syntax<'a>> {
-    let mut result: Vec<&Syntax> = vec![];
+    let mut nodes: Vec<&Syntax> = vec![];
 
     loop {
-        result.extend(syntax_from_cursor(
+        nodes.extend(syntax_from_cursor(
             arena,
             src,
             nl_pos,
@@ -1454,7 +1500,7 @@ fn all_syntaxes_from_cursor<'a>(
         }
     }
 
-    result
+    nodes
 }
 
 /// Convert the tree-sitter node at `cursor` to a difftastic syntax
@@ -1533,9 +1579,9 @@ fn list_from_cursor<'a>(
     // the delimiter text and the start/end of this node as the
     // delimiter positions.
     let outer_open_content = "";
-    let outer_open_position = nl_pos.from_offsets(root_node.start_byte(), root_node.start_byte());
+    let outer_open_position = nl_pos.from_region(root_node.start_byte(), root_node.start_byte());
     let outer_close_content = "";
-    let outer_close_position = nl_pos.from_offsets(root_node.end_byte(), root_node.end_byte());
+    let outer_close_position = nl_pos.from_region(root_node.end_byte(), root_node.end_byte());
 
     // TODO: this should probably only allow the delimiters to be the
     // first and last child in the list.
@@ -1583,7 +1629,7 @@ fn list_from_cursor<'a>(
             ));
         } else if node_i == i {
             inner_open_content = &src[node.start_byte()..node.end_byte()];
-            inner_open_position = nl_pos.from_offsets(node.start_byte(), node.end_byte());
+            inner_open_position = nl_pos.from_region(node.start_byte(), node.end_byte());
         } else if node_i < j {
             between_delim.extend(syntax_from_cursor(
                 arena,
@@ -1598,7 +1644,7 @@ fn list_from_cursor<'a>(
             ));
         } else if node_i == j {
             inner_close_content = &src[node.start_byte()..node.end_byte()];
-            inner_close_position = nl_pos.from_offsets(node.start_byte(), node.end_byte());
+            inner_close_position = nl_pos.from_region(node.start_byte(), node.end_byte());
         } else if node_i > j {
             after_delim.extend(syntax_from_cursor(
                 arena,
@@ -1664,7 +1710,7 @@ fn atom_from_cursor<'a>(
     ignore_comments: bool,
 ) -> Option<&'a Syntax<'a>> {
     let node = cursor.node();
-    let position = nl_pos.from_offsets(node.start_byte(), node.end_byte());
+    let position = nl_pos.from_region(node.start_byte(), node.end_byte());
     let mut content = &src[node.start_byte()..node.end_byte()];
 
     // The C and C++ grammars have a '\n' node with the
